@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="description" content="GPU-accelerated Mandelbrot and Julia set explorer built with Rust, wgpu and WebGPU.">
+  <title>Fractal Explorer</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <canvas id="view" aria-label="Fractal view"></canvas>
+
+  <!-- Window manager: docks on three edges, a layer for floating panels, and the drop preview -->
+  <div class="dock dock--left" id="dock-left"></div>
+  <div class="dock dock--right" id="dock-right"></div>
+  <div class="dock dock--bottom" id="dock-bottom"></div>
+  <div class="float-layer" id="float-layer"></div>
+  <div class="dock-preview" id="dock-preview" hidden></div>
+
+  <!-- Control panel (top-left) -->
+  <aside class="panel" id="panel" aria-labelledby="panel-title" hidden>
+    <header class="panel__head win__head">
+      <span class="led" id="led"></span>
+      <h1 class="win__title" id="panel-title">Fractal Explorer</h1>
+    </header>
+
+    <div class="panel__body">
+      <dl class="readout">
+        <dt>GPU</dt>     <dd id="gpu">—</dd>
+        <dt>Set</dt>     <dd id="mode">Mandelbrot</dd>
+        <dt>Centre</dt>  <dd id="center">—</dd>
+        <dt>Zoom</dt>    <dd id="zoom">1×</dd>
+        <dt>Frame</dt>   <dd id="frame">—</dd>
+        <dt>GPU time</dt><dd id="gpu-time" title="Time the GPU spent drawing the last measured frame (WebGPU timestamp queries)">—</dd>
+      </dl>
+      <p class="warn" id="precision" hidden></p>
+
+      <div class="control">
+        <span><span>Formula <kbd>F</kbd></span></span>
+        <div class="segmented segmented--2x2" id="formula" role="radiogroup">
+          <button data-f="0" aria-pressed="true" title="z → z² + c">Mandelbrot</button>
+          <button data-f="1" title="z → (|x| − i|y|)² + c">Burning Ship</button>
+          <button data-f="2" title="z → conj(z)² + c">Tricorn</button>
+          <button data-f="3" title="z → zᵖ + c">Multibrot</button>
+        </div>
+      </div>
+
+      <div class="control">
+        <span><span>Precision <kbd>D</kbd></span></span>
+        <div class="segmented segmented--3" id="precision-mode" role="radiogroup">
+          <button data-d="0" aria-pressed="true" title="32-bit floats: fastest, pixelates past ~10⁵× zoom">Fast</button>
+          <button data-d="1" title="Double-float: pairs of 32-bit floats (~48 bits). ~10–20× more GPU work per step, sharp to ~10¹⁰×">Deep</button>
+          <button data-d="2" title="Perturbation: one reference orbit calculated on the CPU in 106-bit arithmetic; each pixel iterates only its difference from it. Sharp to ~10²⁸×">Perturb</button>
+        </div>
+        <p class="hint" id="precision-note" hidden></p>
+      </div>
+
+      <label class="control" id="power-row" hidden>
+        <span><span>Power <i>p</i></span> <output id="power-out">3.00</output></span>
+        <input type="range" id="power" min="1.5" max="8" step="0.01" value="3">
+      </label>
+
+      <label class="control">
+        <span>Iterations <output id="iter-out">500</output></span>
+        <input type="range" id="iter" min="64" max="5000" step="1" value="500">
+      </label>
+
+      <div class="control">
+        <span>Palette</span>
+        <div class="segmented" id="palette" role="radiogroup">
+          <button data-p="0" aria-pressed="true">Ocean</button>
+          <button data-p="1">Phosphor</button>
+          <button data-p="2">Amber</button>
+          <button data-p="3">Fire</button>
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button id="reset">Reset <kbd>R</kbd></button>
+        <button id="mandel" title="Leave Julia mode">Main set <kbd>M</kbd></button>
+      </div>
+      <button class="save-btn" id="save-place" title="Save this view to your places">★ Save this view <kbd>S</kbd></button>
+
+      <details class="help">
+        <summary>Controls</summary>
+        <ul>
+          <li>Drag to pan, wheel or pinch to zoom</li>
+          <li>Double-click to zoom in, <kbd>Shift</kbd>+double-click to zoom out</li>
+          <li>Right-click or <kbd>J</kbd> on a point for its Julia set</li>
+          <li><kbd>S</kbd> save view · <kbd>B</kbd> saved places · <kbd>I</kbd> description</li>
+          <li><kbd>F</kbd> formula · <kbd>D</kbd> precision · <kbd>P</kbd> palette · <kbd>[</kbd> <kbd>]</kbd> iterations · <kbd>H</kbd> controls · <kbd>G</kbd> guide</li>
+          <li>Drag a panel's title bar to move it, or to the left, right or bottom edge to dock it</li>
+        </ul>
+      </details>
+    </div>
+  </aside>
+
+  <!-- Hamburger menu (top-right) -->
+  <div class="menu-wrap">
+    <button class="menu-btn" id="menu-btn" aria-label="Menu" aria-haspopup="menu" aria-expanded="false" aria-controls="menu">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="menu" id="menu" role="menu" hidden>
+      <button role="menuitem" data-action="controls">Controls panel <kbd>H</kbd></button>
+      <button role="menuitem" data-action="guide">Guide &amp; tutorial <kbd>G</kbd></button>
+      <button role="menuitem" data-action="places">Saved places <kbd>B</kbd></button>
+      <button role="menuitem" data-action="insight">What you're looking at <kbd>I</kbd></button>
+      <button role="menuitem" data-action="reset-layout">Reset panel layout</button>
+      <button role="menuitem" data-action="settings">Settings</button>
+      <hr>
+      <button role="menuitem" data-action="dump">Dump GPU state to console</button>
+      <hr>
+      <button role="menuitem" data-action="about">About Fractal Explorer</button>
+    </div>
+  </div>
+
+  <!-- Beginner guide (right side) -->
+  <aside class="guide" id="guide" aria-labelledby="guide-title" hidden>
+    <header class="guide__head win__head">
+      <h2 id="guide-title">Guide</h2>
+    </header>
+    <div class="guide__chapters" id="guide-chapters" role="group" aria-label="Guide chapters">
+      <button data-c="0">Fractals &amp; the maths <span class="count"></span></button>
+      <button data-c="1">Using the app <span class="count"></span></button>
+    </div>
+    <div class="guide__progress">
+      <span class="guide__step" id="guide-step"></span>
+      <div class="dots" id="guide-dots"></div>
+    </div>
+    <div class="guide__body" id="guide-body">
+      <h3 id="guide-heading"></h3>
+      <div class="guide__text" id="guide-text"></div>
+      <div class="guide__actions" id="guide-actions"></div>
+    </div>
+    <footer class="guide__foot">
+      <button id="guide-prev">‹ Back</button>
+      <button id="guide-next">Next ›</button>
+    </footer>
+  </aside>
+
+  <!-- Live description of the current view (bottom centre) -->
+  <section class="insight" id="insight" aria-labelledby="insight-title" hidden>
+    <header class="insight__head win__head">
+      <h2 id="insight-title">What you're looking at</h2>
+      <span class="insight__summary" id="insight-summary"></span>
+    </header>
+    <div class="insight__body" id="insight-body" aria-live="polite">
+      <p id="seeing-where"></p>
+      <p class="insight__tip" id="seeing-tip" hidden></p>
+      <p class="insight__stats" id="seeing-stats"></p>
+    </div>
+  </section>
+
+  <!-- Saved places (right side; shares the drawer slot with the guide) -->
+  <aside class="places" id="places" aria-labelledby="places-title" hidden>
+    <header class="places__head win__head">
+      <h2 id="places-title">Saved places</h2>
+      <span class="places__count" id="places-count"></span>
+    </header>
+    <div class="places__body">
+      <button class="save-btn" id="places-save">★ Save current view</button>
+      <p class="places__empty" id="places-empty">
+        Nothing saved yet. When you find somewhere you like, press <kbd>S</kbd> or ★ Save. The formula,
+        zoom, iterations, palette and precision are all remembered, so Go takes you straight back.
+      </p>
+      <ul class="places__list" id="places-list"></ul>
+    </div>
+    <footer class="places__foot">
+      <button id="places-export" title="Download your places as a JSON file">Export</button>
+      <button id="places-import" title="Add places from an exported JSON file">Import</button>
+      <span class="spacer"></span>
+      <input type="file" id="places-file" accept="application/json,.json" hidden>
+    </footer>
+  </aside>
+
+  <div class="toast" id="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <button id="toast-action" hidden></button>
+  </div>
+
+  <!-- About dialog -->
+  <dialog class="dialog about" id="about" aria-labelledby="about-title">
+    <form method="dialog">
+      <header class="dialog__head">
+        <h2>About</h2>
+        <button class="icon-btn" value="close" aria-label="Close">×</button>
+      </header>
+
+      <section class="about__hero">
+        <img src="icons/icon-192.png" alt="" width="72" height="72">
+        <div>
+          <h3 id="about-title">Fractal Explorer</h3>
+          <p class="about__version" id="about-version"></p>
+          <p>Explore the Mandelbrot, Burning Ship, Tricorn and Multibrot sets and their Julia sets,
+          drawn live on your GPU.</p>
+        </div>
+      </section>
+
+      <section class="dialog__section">
+        <h3>Built with</h3>
+        <ul class="about__stack">
+          <li><b>Rust</b> for the app logic, compiled to <b>WebAssembly</b> with wasm-bindgen</li>
+          <li><b>wgpu</b> 30, driving the browser's <b>WebGPU</b> API</li>
+          <li><b>WGSL</b> shaders: one fragment shader per pixel, plus double-float maths for Deep zoom</li>
+          <li><b>Perturbation</b> for very deep zoom: a 106-bit reference orbit on the CPU, per-pixel differences on the GPU</li>
+          <li>Vanilla HTML, CSS and JavaScript for the interface; works offline as a PWA</li>
+        </ul>
+      </section>
+
+      <section class="dialog__section">
+        <h3>This system</h3>
+        <dl class="about__system" id="about-system"></dl>
+        <div class="dialog__buttons">
+          <button type="button" id="about-copy">Copy diagnostics</button>
+        </div>
+      </section>
+
+      <section class="dialog__section">
+        <h3>Credits</h3>
+        <ul class="about__credits">
+          <li>The Mandelbrot set is named after Benoit Mandelbrot; Julia sets after Gaston Julia.</li>
+          <li>Double-float arithmetic follows T. J. Dekker (1971) and D. E. Knuth's TwoSum.</li>
+          <li>Colour palettes use Inigo Quilez's cosine-palette formula.</li>
+          <li>π at the neck of the set was found by Dave Boll (1991).</li>
+        </ul>
+      </section>
+
+      <footer class="dialog__foot about__foot">
+        <a id="about-repo" class="gh-button" href="https://github.com/psiborg/Fractal-Explorer" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span id="about-repo-label">View on GitHub</span>
+        </a>
+        <button value="close" class="primary">Close</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Settings dialog -->
+  <dialog class="dialog" id="settings" aria-labelledby="settings-title">
+    <form method="dialog">
+      <header class="dialog__head">
+        <h2 id="settings-title">Settings</h2>
+        <button class="icon-btn" value="close" aria-label="Close settings">×</button>
+      </header>
+
+      <section class="dialog__section">
+        <h3>General</h3>
+        <label class="check">
+          <input type="checkbox" id="set-guide-start">
+          <span>Open the guide when the app starts</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="set-insight">
+          <span>Show the "What you're looking at" panel <small>(I)</small></span>
+        </label>
+        <div class="dialog__buttons">
+          <button type="button" id="set-reset-layout" title="Put every panel back in its original dock">Reset panel layout</button>
+        </div>
+      </section>
+
+      <section class="dialog__section">
+        <h3>Developer</h3>
+        <label class="check check--master">
+          <input type="checkbox" id="set-debug">
+          <span>Debug logging to the browser console <small>(F12 → Console)</small></span>
+        </label>
+
+        <fieldset class="cats" id="set-cats">
+          <legend class="sr-only">Debug categories</legend>
+          <label class="check"><input type="checkbox" data-cat="1">
+            <span><b class="tag tag--wgpu">wgpu</b><span>Adapter, device limits, surface setup, pipeline creation, resizes</span></span></label>
+          <label class="check"><input type="checkbox" data-cat="2">
+            <span><b class="tag tag--wgsl">wgsl</b><span>Shader source, browser compiler messages, uniform layout</span></span></label>
+          <label class="check"><input type="checkbox" data-cat="8">
+            <span><b class="tag tag--wasm">wasm</b><span>Module size and load time, linear memory, JS→Wasm calls per second</span></span></label>
+          <label class="check"><input type="checkbox" data-cat="32">
+            <span><b class="tag tag--app">app</b><span>Startup timeline and page events</span></span></label>
+          <label class="check"><input type="checkbox" data-cat="4">
+            <span><b class="tag tag--frame">frame</b><span>One line per rendered frame with the uniforms sent <small>(noisy)</small></span></span></label>
+          <label class="check"><input type="checkbox" data-cat="16">
+            <span><b class="tag tag--internal">wgpu-log</b><span>wgpu's own internal log output</span></span></label>
+        </fieldset>
+
+        <p class="note">
+          GPU validation errors and device loss are always logged. Startup details (adapter,
+          limits, shader compilation) are logged while the app loads, so reload to see them
+          after turning a category on. Add <code>?debug</code> to the URL to switch everything
+          on for one visit.
+        </p>
+        <div class="dialog__buttons">
+          <button type="button" id="set-dump">Dump GPU state now</button>
+          <button type="button" id="set-reload">Reload app</button>
+        </div>
+      </section>
+
+      <footer class="dialog__foot">
+        <button value="close" class="primary">Done</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="fatal" id="fatal" hidden>
+    <h2>WebGPU unavailable</h2>
+    <p id="fatal-msg"></p>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
