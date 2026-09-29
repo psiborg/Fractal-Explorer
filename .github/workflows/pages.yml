@@ -1,0 +1,67 @@
+# Builds the Wasm module and publishes web/ to GitHub Pages on every push to main.
+# One-time setup: repo Settings → Pages → Build and deployment → Source: "GitHub Actions".
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # allow a manual run from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; don't cancel one that's already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable + wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry and target/
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      # Unit tests plus naga validation of the composed WGSL shaders:
+      # a shader that won't compile never reaches the live site.
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build Wasm (release)
+        run: bash build.sh # via bash so it works even if the exec bit was lost on Windows
+
+      # wasm-pack writes a `*` .gitignore into its output folder; it isn't needed on the site.
+      - name: Tidy build output
+        run: rm -f web/libs/fractal/.gitignore
+
+      - uses: actions/configure-pages@v6
+
+      - name: Upload web/ as the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

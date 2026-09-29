@@ -1,5 +1,8 @@
 # Fractal Explorer
 
+**[▶ Live demo](https://psiborg.github.io/Fractal-Explorer/)**. Needs a browser with WebGPU:
+recent Chrome or Edge, or Safari 26.
+
 A GPU-accelerated fractal explorer: Mandelbrot, Burning Ship, Tricorn and
 Multibrot sets, each with their Julia sets. The fractal state and all
 GPU work are written in Rust with [`wgpu`](https://wgpu.rs) 30, compiled to
@@ -37,6 +40,21 @@ HTTP does not.
 Use `--dev` with either build script for faster compiles while iterating on Rust code.
 Shader-only changes still need a rebuild, because the WGSL is embedded with
 `include_str!`.
+
+## Deploy to GitHub Pages
+
+`.github/workflows/pages.yml` publishes the live demo on every push to `main`:
+
+1. installs stable Rust with the `wasm32-unknown-unknown` target, and wasm-pack;
+2. runs `cargo test --locked`, so a shader that fails naga validation never ships;
+3. runs `build.sh` to produce `web/libs/fractal/`;
+4. uploads `web/` as the site and deploys it.
+
+One-time setup: in the repo go to **Settings → Pages → Build and deployment**
+and set **Source** to **GitHub Actions**. After that, pushes deploy
+automatically, and you can also start a run by hand from the Actions tab.
+The build output stays out of git. Every path in the app is relative, so it
+works under the `/Fractal-Explorer/` sub-path without changes.
 
 ## Tests
 
@@ -303,8 +321,11 @@ flowchart LR
     start["start.sh / start.bat"]
     serve["serve.py<br/>MIME types, no-cache"]
     tests["tests/shader.rs<br/>naga WGSL validation"]
+    ci[".github/workflows/pages.yml<br/>GitHub Pages deploy"]
     start --> serve
     cargo --> build
+    ci -- runs --> tests
+    ci -- runs --> build
   end
 
   subgraph page["web/ — the PWA"]
@@ -367,6 +388,7 @@ flowchart LR
   build --> glue
   rust -- compiled by --> build
   serve -. serves .-> page & wasm
+  ci -. publishes to Pages .-> page & wasm
   tests -. validates .-> shaders
   app & jsdebug -- JS ↔ Wasm calls --> glue
   glue --> lib
@@ -459,6 +481,7 @@ src/view.rs            camera maths with a double-double centre (pan, zoom-at-cu
 src/dd.rs              double-double (f64 pair) arithmetic, ~106 bits
 src/perturb.rs         reference choice, reference orbit, when to recompute it
 tests/shader.rs        WGSL validation of both composed shaders
+.github/workflows/pages.yml  CI: test, build Wasm, publish web/ to GitHub Pages
 web/                   the PWA: index.html, css/, icons/, sw.js
 web/js/app.js          canvas, input, HUD, menu, settings, fly-to animation
 web/js/guide.js        two-chapter guide: fractals & maths, then the app tour
